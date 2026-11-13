@@ -1,5 +1,6 @@
 package org.gotson.komga.interfaces.api.rest.dto
 
+import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.constraints.Max
 import jakarta.validation.constraints.Pattern
 import jakarta.validation.constraints.Positive
@@ -53,4 +54,25 @@ class SettingsUpdateDto {
     }
 
   var nextUiAsDefault: Boolean? = null
+
+  var koboSyncComics: Boolean? = null
+
+  @get:Positive
+  @get:Schema(description = "Maximum page width for comics sent to Kobo. Set to null for no resize. Must be set together with koboComicMaxHeight.")
+  var koboComicMaxWidth: Int?
+    by Delegates.observable(null) { prop, _, _ ->
+      isSet[prop.name] = true
+    }
+
+  @get:Positive
+  @get:Schema(description = "Maximum page height for comics sent to Kobo. Set to null for no resize. Must be set together with koboComicMaxWidth.")
+  var koboComicMaxHeight: Int?
+    by Delegates.observable(null) { prop, _, _ ->
+      isSet[prop.name] = true
+    }
+
+  var koboComicGrayscale: Boolean? = null
+
+  @get:Schema(description = "Title template for comics sent to Kobo. Placeholders: {series}, {number}, {number:N}, {title}.")
+  var koboComicTitleTemplate: String? = null
 }

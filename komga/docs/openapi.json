@@ -14222,11 +14222,30 @@
           "kepubifyPath": {
             "$ref": "#/components/schemas/SettingMultiSourceString"
           },
+          "koboComicGrayscale": {
+            "type": "boolean"
+          },
+          "koboComicMaxHeight": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum page height for comics sent to Kobo. Absent means no resize."
+          },
+          "koboComicMaxWidth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum page width for comics sent to Kobo. Absent means no resize."
+          },
+          "koboComicTitleTemplate": {
+            "type": "string"
+          },
           "koboPort": {
             "type": "integer",
             "format": "int32"
           },
           "koboProxy": {
+            "type": "boolean"
+          },
+          "koboSyncComics": {
             "type": "boolean"
           },
           "maxUploadFileSizeBytes": {
@@ -14276,12 +14295,32 @@
             "deprecated": true,
             "description": "Will be removed in a future version"
           },
+          "koboComicGrayscale": {
+            "type": "boolean"
+          },
+          "koboComicMaxHeight": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum page height for comics sent to Kobo. Set to null for no resize. Must be set together with koboComicMaxWidth."
+          },
+          "koboComicMaxWidth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum page width for comics sent to Kobo. Set to null for no resize. Must be set together with koboComicMaxHeight."
+          },
+          "koboComicTitleTemplate": {
+            "type": "string",
+            "description": "Title template for comics sent to Kobo. Placeholders: {series}, {number}, {number:N}, {title}."
+          },
           "koboPort": {
             "type": "integer",
             "format": "int32",
             "maximum": 65535
           },
           "koboProxy": {
+            "type": "boolean"
+          },
+          "koboSyncComics": {
             "type": "boolean"
           },
           "nextUiAsDefault": {

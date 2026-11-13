@@ -20,6 +20,7 @@ import org.gotson.komga.domain.persistence.MediaRepository
 import org.gotson.komga.domain.persistence.SeriesMetadataRepository
 import org.gotson.komga.domain.persistence.SeriesRepository
 import org.gotson.komga.domain.persistence.SyncPointRepository
+import org.gotson.komga.infrastructure.configuration.KomgaSettingsProvider
 import org.gotson.komga.language.toZonedDateTime
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.AfterEach
@@ -46,6 +47,7 @@ class SyncPointLifecycleTest(
   @Autowired private val seriesRepository: SeriesRepository,
   @Autowired private val seriesLifecycle: SeriesLifecycle,
   @Autowired private val mediaRepository: MediaRepository,
+  @Autowired private val komgaSettingsProvider: KomgaSettingsProvider,
 ) {
   private val library1 = makeLibrary()
   private val library2 = makeLibrary()
@@ -80,6 +82,7 @@ class SyncPointLifecycleTest(
   @AfterEach
   fun `clear repository`() {
     seriesLifecycle.deleteMany(seriesRepository.findAll())
+    komgaSettingsProvider.koboSyncComics = false
   }
 
   @Test
@@ -358,5 +361,65 @@ class SyncPointLifecycleTest(
     assertThat(rlRemoved3to4.map { it.readListId }).containsExactlyInAnyOrder(ON_DECK_ID)
     assertThat(syncPoint4Page1).containsExactlyInAnyOrderElementsOf(rlRemoved3to4)
     assertThat(syncPoint4Page2).isEmpty()
+  }
+
+  @Test
+  fun `given comics setting when creating syncpoint then comics are included only when enabled and pdf is never included`() {
+    // given
+    val bookEpub = makeBook("epub", libraryId = library1.id)
+    val bookCbz = makeBook("cbz", libraryId = library1.id)
+    val bookCbr = makeBook("cbr", libraryId = library1.id)
+    val bookPdf = makeBook("pdf", libraryId = library1.id)
+
+    makeSeries(name = "series1", libraryId = library1.id).let { series ->
+      seriesLifecycle.createSeries(series).let { created ->
+        seriesLifecycle.addBooks(created, listOf(bookEpub, bookCbz, bookCbr, bookPdf))
+      }
+    }
+
+    mapOf(bookEpub to MediaType.EPUB, bookCbz to MediaType.ZIP, bookCbr to MediaType.RAR_5, bookPdf to MediaType.PDF).forEach { (book, mediaType) ->
+      mediaRepository.findById(book.id).let { media -> mediaRepository.update(media.copy(status = Media.Status.READY, mediaType = mediaType.type)) }
+    }
+
+    // when
+    komgaSettingsProvider.koboSyncComics = false
+    val syncPointWithoutComics = syncPointLifecycle.createSyncPoint(user1, null, listOf(library1.id))
+    komgaSettingsProvider.koboSyncComics = true
+    val syncPointWithComics = syncPointLifecycle.createSyncPoint(user1, null, listOf(library1.id))
+
+    // then
+    assertThat(syncPointRepository.findBooksById(syncPointWithoutComics.id, false, Pageable.unpaged()).map { it.bookId })
+      .containsExactlyInAnyOrder(bookEpub.id)
+    assertThat(syncPointRepository.findBooksById(syncPointWithComics.id, false, Pageable.unpaged()).map { it.bookId })
+      .containsExactlyInAnyOrder(bookEpub.id, bookCbz.id, bookCbr.id)
+    assertThat(syncPointRepository.findBooksAdded(syncPointWithoutComics.id, syncPointWithComics.id, false, Pageable.unpaged()).map { it.bookId })
+      .containsExactlyInAnyOrder(bookCbz.id, bookCbr.id)
+  }
+
+  @Test
+  fun `given comics are not synced when creating syncpoint then on deck does not contain comics`() {
+    // given
+    val book1 = makeBook("book 1", libraryId = library1.id).copy(number = 1)
+    val book2 = makeBook("book 2", libraryId = library1.id).copy(number = 2)
+
+    makeSeries(name = "series1", libraryId = library1.id).let { series ->
+      seriesLifecycle.createSeries(series).let { created ->
+        seriesLifecycle.addBooks(created, listOf(book1, book2))
+      }
+    }
+
+    bookRepository.findAll().forEach { mediaRepository.findById(it.id).let { media -> mediaRepository.update(media.copy(status = Media.Status.READY, mediaType = MediaType.ZIP.type)) } }
+    bookLifecycle.markReadProgressCompleted(book1.id, user1)
+
+    // when
+    komgaSettingsProvider.koboSyncComics = false
+    val syncPointWithoutComics = syncPointLifecycle.createSyncPoint(user1, null, listOf(library1.id))
+    komgaSettingsProvider.koboSyncComics = true
+    val syncPointWithComics = syncPointLifecycle.createSyncPoint(user1, null, listOf(library1.id))
+
+    // then
+    assertThat(syncPointRepository.findReadListsById(syncPointWithoutComics.id, false, Pageable.unpaged())).isEmpty()
+    assertThat(syncPointRepository.findBookIdsByReadListIds(syncPointWithComics.id, listOf(ON_DECK_ID)).map { it.bookId })
+      .containsExactly(book2.id)
   }
 }

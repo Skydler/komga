@@ -192,6 +192,12 @@ class SettingsControllerTest(
       """{"serverContextPath": "/invalid/end-"}""",
       """{"serverContextPath": "/invalid/end_"}""",
       """{"serverContextPath": "/日本語"}""",
+      """{"koboComicMaxWidth": 0, "koboComicMaxHeight": 100}""",
+      """{"koboComicMaxWidth": -1, "koboComicMaxHeight": 100}""",
+      """{"koboComicMaxWidth": 100, "koboComicMaxHeight": null}""",
+      """{"koboComicMaxWidth": null}""",
+      """{"koboComicTitleTemplate": "{series} {volume}"}""",
+      """{"koboComicTitleTemplate": "{number:4}"}""",
     ],
   )
   fun `given admin user when updating with invalid settings then returns bad request`(jsonString: String) {
@@ -202,5 +208,66 @@ class SettingsControllerTest(
       }.andExpect {
         status { isBadRequest() }
       }
+  }
+
+  @Test
+  @WithMockCustomUser(roles = ["ADMIN"])
+  fun `given admin user when updating kobo comic settings then settings are updated`() {
+    try {
+      //language=JSON
+      val jsonString =
+        """
+        {
+          "koboSyncComics": true,
+          "koboComicMaxWidth": 1072,
+          "koboComicMaxHeight": 1448,
+          "koboComicGrayscale": true,
+          "koboComicTitleTemplate": "{series} - {title}"
+        }
+        """.trimIndent()
+
+      mockMvc
+        .patch("/api/v1/settings") {
+          contentType = MediaType.APPLICATION_JSON
+          content = jsonString
+        }.andExpect {
+          status { isNoContent() }
+        }
+
+      assertThat(komgaSettingsProvider.koboSyncComics).isTrue
+      assertThat(komgaSettingsProvider.koboComicMaxWidth).isEqualTo(1072)
+      assertThat(komgaSettingsProvider.koboComicMaxHeight).isEqualTo(1448)
+      assertThat(komgaSettingsProvider.koboComicGrayscale).isTrue
+      assertThat(komgaSettingsProvider.koboComicTitleTemplate).isEqualTo("{series} - {title}")
+
+      // no resize
+      mockMvc
+        .patch("/api/v1/settings") {
+          contentType = MediaType.APPLICATION_JSON
+          content = """{"koboComicMaxWidth": null, "koboComicMaxHeight": null}"""
+        }.andExpect {
+          status { isNoContent() }
+        }
+
+      assertThat(komgaSettingsProvider.koboComicMaxWidth).isNull()
+      assertThat(komgaSettingsProvider.koboComicMaxHeight).isNull()
+
+      mockMvc
+        .get("/api/v1/settings")
+        .andExpect {
+          status { isOk() }
+          jsonPath("koboSyncComics") { value(true) }
+          jsonPath("koboComicMaxWidth") { doesNotHaveJsonPath() }
+          jsonPath("koboComicMaxHeight") { doesNotHaveJsonPath() }
+          jsonPath("koboComicGrayscale") { value(true) }
+          jsonPath("koboComicTitleTemplate") { value("{series} - {title}") }
+        }
+    } finally {
+      komgaSettingsProvider.koboSyncComics = false
+      komgaSettingsProvider.koboComicMaxWidth = KomgaSettingsProvider.KOBO_COMIC_DEFAULT_MAX_WIDTH
+      komgaSettingsProvider.koboComicMaxHeight = KomgaSettingsProvider.KOBO_COMIC_DEFAULT_MAX_HEIGHT
+      komgaSettingsProvider.koboComicGrayscale = false
+      komgaSettingsProvider.koboComicTitleTemplate = KomgaSettingsProvider.KOBO_COMIC_DEFAULT_TITLE_TEMPLATE
+    }
   }
 }

@@ -149,8 +149,10 @@ class SyncPointDao(
     val count =
       dslRW
         .insertInto(sprlb)
-        .select(query)
-        .execute()
+        .select(
+          // only keep books that are part of the sync point, so the tag does not point to books that are not synced
+          query.and(b.ID.`in`(DSL.select(spb.BOOK_ID).from(spb).where(spb.SYNC_POINT_ID.eq(syncPointId)))),
+        ).execute()
 
     // only add the read list entry if some books were added
     if (count > 0) {

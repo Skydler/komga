@@ -9,6 +9,7 @@ import org.gotson.komga.infrastructure.kobo.KepubConverter
 import org.gotson.komga.infrastructure.openapi.OpenApiConfiguration
 import org.gotson.komga.infrastructure.security.KomgaPrincipal
 import org.gotson.komga.infrastructure.web.WebServerEffectiveSettings
+import org.gotson.komga.interfaces.api.kobo.KoboTitleTemplate
 import org.gotson.komga.interfaces.api.rest.dto.SettingMultiSource
 import org.gotson.komga.interfaces.api.rest.dto.SettingsDto
 import org.gotson.komga.interfaces.api.rest.dto.SettingsUpdateDto
@@ -27,6 +28,7 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.ResponseStatus
 import org.springframework.web.bind.annotation.RestController
+import org.springframework.web.server.ResponseStatusException
 import kotlin.time.Duration.Companion.days
 
 @RestController
@@ -59,6 +61,11 @@ class SettingsController(
         SettingMultiSource(kepubConverter.kepubifyConfigurationPath, komgaSettingsProvider.kepubifyPath, kepubConverter.kepubifyPath?.toString()),
         multipartProperties.maxFileSize?.toBytes(),
         komgaSettingsProvider.nextUiAsDefault,
+        komgaSettingsProvider.koboSyncComics,
+        komgaSettingsProvider.koboComicMaxWidth,
+        komgaSettingsProvider.koboComicMaxHeight,
+        komgaSettingsProvider.koboComicGrayscale,
+        komgaSettingsProvider.koboComicTitleTemplate,
       )
 
     return if (principal.user.isAdmin) settingsDto else settingsDto.public()
@@ -73,6 +80,16 @@ class SettingsController(
     @Parameter(description = "Fields to update. You can omit fields you don't want to update.")
     newSettings: SettingsUpdateDto,
   ) {
+    // validate everything before saving anything
+    val koboComicMaxWidth = if (newSettings.isSet("koboComicMaxWidth")) newSettings.koboComicMaxWidth else komgaSettingsProvider.koboComicMaxWidth
+    val koboComicMaxHeight = if (newSettings.isSet("koboComicMaxHeight")) newSettings.koboComicMaxHeight else komgaSettingsProvider.koboComicMaxHeight
+    if ((koboComicMaxWidth == null) != (koboComicMaxHeight == null))
+      throw ResponseStatusException(HttpStatus.BAD_REQUEST, "koboComicMaxWidth and koboComicMaxHeight must be both set or both empty")
+    newSettings.koboComicTitleTemplate?.let { template ->
+      val errors = KoboTitleTemplate.validate(template)
+      if (errors.isNotEmpty()) throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid koboComicTitleTemplate: ${errors.joinToString("; ")}")
+    }
+
     newSettings.deleteEmptyCollections?.let { komgaSettingsProvider.deleteEmptyCollections = it }
     newSettings.deleteEmptyReadLists?.let { komgaSettingsProvider.deleteEmptyReadLists = it }
     newSettings.rememberMeDurationDays?.let { komgaSettingsProvider.rememberMeDuration = it.days }
@@ -87,5 +104,11 @@ class SettingsController(
     if (newSettings.isSet("koboPort")) komgaSettingsProvider.koboPort = newSettings.koboPort
     if (newSettings.isSet("kepubifyPath")) komgaSettingsProvider.kepubifyPath = newSettings.kepubifyPath
     newSettings.nextUiAsDefault?.let { komgaSettingsProvider.nextUiAsDefault = it }
+
+    newSettings.koboSyncComics?.let { komgaSettingsProvider.koboSyncComics = it }
+    if (newSettings.isSet("koboComicMaxWidth")) komgaSettingsProvider.koboComicMaxWidth = newSettings.koboComicMaxWidth
+    if (newSettings.isSet("koboComicMaxHeight")) komgaSettingsProvider.koboComicMaxHeight = newSettings.koboComicMaxHeight
+    newSettings.koboComicGrayscale?.let { komgaSettingsProvider.koboComicGrayscale = it }
+    newSettings.koboComicTitleTemplate?.let { komgaSettingsProvider.koboComicTitleTemplate = it }
   }
 }

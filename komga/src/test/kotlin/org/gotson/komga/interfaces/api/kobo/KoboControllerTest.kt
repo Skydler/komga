@@ -1,6 +1,7 @@
 package org.gotson.komga.interfaces.api.kobo
 
 import org.assertj.core.api.Assertions.assertThat
+import org.gotson.komga.domain.model.BookPage
 import org.gotson.komga.domain.model.KomgaUser
 import org.gotson.komga.domain.model.Media
 import org.gotson.komga.domain.model.MediaType
@@ -8,10 +9,14 @@ import org.gotson.komga.domain.model.UserRoles
 import org.gotson.komga.domain.model.makeBook
 import org.gotson.komga.domain.model.makeLibrary
 import org.gotson.komga.domain.model.makeSeries
+import org.gotson.komga.domain.persistence.BookMetadataRepository
+import org.gotson.komga.domain.persistence.BookRepository
 import org.gotson.komga.domain.persistence.KomgaUserRepository
 import org.gotson.komga.domain.persistence.LibraryRepository
 import org.gotson.komga.domain.persistence.MediaRepository
+import org.gotson.komga.domain.persistence.ReadProgressRepository
 import org.gotson.komga.domain.persistence.SeriesRepository
+import org.gotson.komga.domain.service.BookLifecycle
 import org.gotson.komga.domain.service.KomgaUserLifecycle
 import org.gotson.komga.domain.service.SeriesLifecycle
 import org.gotson.komga.infrastructure.configuration.KomgaSettingsProvider
@@ -33,7 +38,9 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.http.HttpHeaders
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
+import org.springframework.test.web.servlet.put
 import java.util.stream.Stream
+import org.springframework.http.MediaType as SpringMediaType
 
 @SpringBootTest(properties = ["komga.kobo.sync-item-limit=1"])
 @AutoConfigureMockMvc(printOnlyOnFailure = false)
@@ -48,6 +55,10 @@ class KoboControllerTest(
   @Autowired private val komgaSyncTokenGenerator: KomgaSyncTokenGenerator,
   @Autowired private val komgaSettingsProvider: KomgaSettingsProvider,
   @Autowired private val serverSettings: WebServerEffectiveSettings,
+  @Autowired private val bookRepository: BookRepository,
+  @Autowired private val bookMetadataRepository: BookMetadataRepository,
+  @Autowired private val bookLifecycle: BookLifecycle,
+  @Autowired private val readProgressRepository: ReadProgressRepository,
 ) {
   private val library1 = makeLibrary()
   private val user1 =
@@ -135,6 +146,165 @@ class KoboControllerTest(
         }
     } finally {
       komgaSettingsProvider.koboProxy = false
+    }
+  }
+
+  @Nested
+  inner class Comics {
+    private val pageCount = 10
+
+    private fun makeComic(): String {
+      val book = makeBook("comic", libraryId = library1.id)
+      makeSeries(name = "One Piece", libraryId = library1.id).also { series ->
+        seriesLifecycle.createSeries(series).let { created ->
+          seriesLifecycle.addBooks(created, listOf(book))
+        }
+      }
+      mediaRepository.findById(book.id).let { media ->
+        mediaRepository.update(
+          media.copy(
+            status = Media.Status.READY,
+            mediaType = MediaType.ZIP.type,
+            pages = (1..pageCount).map { BookPage("$it.jpg", "image/jpeg") },
+            pageCount = pageCount,
+          ),
+        )
+      }
+      bookMetadataRepository.findById(book.id).let { bookMetadataRepository.update(it.copy(title = "Gear 5", number = "45", numberSort = 45F)) }
+      return book.id
+    }
+
+    private fun stateBody(
+      bookId: String,
+      source: String,
+      status: String = "Reading",
+    ) = """
+      {
+        "ReadingStates": [
+          {
+            "EntitlementId": "$bookId",
+            "LastModified": "2099-01-01T00:00:00Z",
+            "CurrentBookmark": {
+              "LastModified": "2099-01-01T00:00:00Z",
+              "ProgressPercent": 1,
+              "ContentSourceProgressPercent": 0,
+              "Location": { "Value": "kobo.1.1", "Type": "KoboSpan", "Source": "$source" }
+            },
+            "Statistics": { "LastModified": "2099-01-01T00:00:00Z" },
+            "StatusInfo": { "LastModified": "2099-01-01T00:00:00Z", "Status": "$status", "TimesStartedReading": 1 }
+          }
+        ]
+      }
+      """.trimIndent()
+
+    @Test
+    fun `given comic in series when getting metadata then title uses template and download is fixed layout epub`() {
+      val bookId = makeComic()
+
+      mockMvc
+        .get("/kobo/$apiKey/v1/library/$bookId/metadata")
+        .andExpect {
+          status { isOk() }
+          jsonPath("$[0].Title") { value("One Piece 0045") }
+          jsonPath("$[0].SubTitle") { value("Gear 5") }
+          jsonPath("$[0].Series.Name") { value("One Piece") }
+          jsonPath("$[0].DownloadUrls[0].Format") { value("EPUB3FL") }
+        }
+    }
+
+    @Test
+    fun `given comic when kobo updates state with a page href then read progress is set to that page`() {
+      val bookId = makeComic()
+
+      mockMvc
+        .put("/kobo/$apiKey/v1/library/$bookId/state") {
+          contentType = SpringMediaType.APPLICATION_JSON
+          content = stateBody(bookId, "OEBPS/Text/page-0004.xhtml")
+        }.andExpect {
+          status { isOk() }
+          jsonPath("RequestResult") { value("Success") }
+        }
+
+      val progress = readProgressRepository.findByBookIdAndUserIdOrNull(bookId, user1.id)
+      assertThat(progress).isNotNull
+      assertThat(progress!!.page).isEqualTo(4)
+      assertThat(progress.completed).isFalse()
+      assertThat(progress.locator?.href).isEqualTo("OEBPS/Text/page-0004.xhtml")
+    }
+
+    @Test
+    fun `given comic when kobo marks it finished then read progress is completed on the last page`() {
+      val bookId = makeComic()
+
+      mockMvc
+        .put("/kobo/$apiKey/v1/library/$bookId/state") {
+          contentType = SpringMediaType.APPLICATION_JSON
+          // Kobo sends the first resource when a book is finished
+          content = stateBody(bookId, "OEBPS/Text/page-0001.xhtml", "Finished")
+        }.andExpect {
+          status { isOk() }
+          jsonPath("RequestResult") { value("Success") }
+        }
+
+      val progress = readProgressRepository.findByBookIdAndUserIdOrNull(bookId, user1.id)
+      assertThat(progress!!.page).isEqualTo(pageCount)
+      assertThat(progress.completed).isTrue()
+    }
+
+    @Test
+    fun `given comic when kobo sends an href that is not a page then request is rejected`() {
+      val bookId = makeComic()
+
+      mockMvc
+        .put("/kobo/$apiKey/v1/library/$bookId/state") {
+          contentType = SpringMediaType.APPLICATION_JSON
+          content = stateBody(bookId, "OEBPS/chapter1.xhtml")
+        }.andExpect {
+          status { isBadRequest() }
+        }
+    }
+
+    @Test
+    fun `given comic read in komga when getting state then bookmark points to the page resource`() {
+      val bookId = makeComic()
+      bookLifecycle.markReadProgress(bookRepository.findByIdOrNull(bookId)!!, user1, 5)
+
+      mockMvc
+        .get("/kobo/$apiKey/v1/library/$bookId/state")
+        .andExpect {
+          status { isOk() }
+          jsonPath("$[0].CurrentBookmark.Location.Source") { value("OEBPS/Text/page-0005.xhtml") }
+          jsonPath("$[0].CurrentBookmark.Location.Value") { value("kobo.1.1") }
+          jsonPath("$[0].CurrentBookmark.Location.Type") { value("KoboSpan") }
+          jsonPath("$[0].CurrentBookmark.ProgressPercent") { value(50.0) }
+          jsonPath("$[0].StatusInfo.Status") { value("Reading") }
+        }
+    }
+
+    @Test
+    fun `given comics setting when syncing then comics are synced only when enabled`() {
+      makeComic()
+
+      try {
+        komgaSettingsProvider.koboSyncComics = false
+        mockMvc
+          .get("/kobo/$apiKey/v1/library/sync")
+          .andExpect {
+            status { isOk() }
+            jsonPath("$.length()") { value(0) }
+          }
+
+        komgaSettingsProvider.koboSyncComics = true
+        mockMvc
+          .get("/kobo/$apiKey/v1/library/sync")
+          .andExpect {
+            status { isOk() }
+            jsonPath("$.length()") { value(1) }
+            jsonPath("$[0].NewEntitlement.BookMetadata.Title") { value("One Piece 0045") }
+          }
+      } finally {
+        komgaSettingsProvider.koboSyncComics = false
+      }
     }
   }
 

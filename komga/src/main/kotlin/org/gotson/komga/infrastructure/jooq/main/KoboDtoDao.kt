@@ -2,10 +2,15 @@ package org.gotson.komga.infrastructure.jooq.main
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.gotson.komga.domain.model.MediaExtensionEpub
+import org.gotson.komga.domain.model.MediaProfile
+import org.gotson.komga.domain.model.MediaType
+import org.gotson.komga.infrastructure.configuration.KomgaSettingsProvider
 import org.gotson.komga.infrastructure.jooq.SplitDslDaoBase
 import org.gotson.komga.infrastructure.jooq.deserializeMediaExtension
+import org.gotson.komga.interfaces.api.kobo.KoboTitleTemplate
 import org.gotson.komga.interfaces.api.kobo.dto.ContributorDto
 import org.gotson.komga.interfaces.api.kobo.dto.KoboBookMetadataDto
+import org.gotson.komga.interfaces.api.kobo.dto.KoboMediaInfo
 import org.gotson.komga.interfaces.api.kobo.dto.KoboSeriesDto
 import org.gotson.komga.interfaces.api.kobo.dto.PublisherDto
 import org.gotson.komga.interfaces.api.kobo.persistence.KoboDtoRepository
@@ -20,6 +25,7 @@ class KoboDtoDao(
   dslRW: DSLContext,
   @Qualifier("dslContextRO") dslRO: DSLContext,
   private val mapper: ObjectMapper,
+  private val komgaSettingsProvider: KomgaSettingsProvider,
 ) : SplitDslDaoBase(dslRW, dslRO),
   KoboDtoRepository {
   private val b = Tables.BOOK
@@ -50,6 +56,7 @@ class KoboDtoDao(
           sd.LANGUAGE,
           b.FILE_SIZE,
           b.ONESHOT,
+          m.MEDIA_TYPE,
           m.EPUB_IS_KEPUB,
           m.EXTENSION_CLASS,
           m.EXTENSION_VALUE_BLOB,
@@ -67,6 +74,21 @@ class KoboDtoDao(
         .where(d.BOOK_ID.`in`(bookIds))
         .fetch()
 
+    val authors =
+      dslRO
+        .selectFrom(a)
+        .where(a.BOOK_ID.`in`(bookIds))
+        .filter { it.name != null }
+        .groupBy({ it.bookId }, { it })
+
+    val projections =
+      dslRO
+        .selectFrom(p)
+        .where(p.BOOK_ID.`in`(bookIds))
+        .groupBy({ it.bookId }, { it })
+
+    val titleTemplate = komgaSettingsProvider.koboComicTitleTemplate
+
     return records.map { rec ->
       val br = rec.into(b)
       val dr = rec.into(d)
@@ -74,19 +96,22 @@ class KoboDtoDao(
       val mr = rec.into(m)
       val btr = rec.into(bt)
       val mediaExtension = mapper.deserializeMediaExtension(mr.extensionClass, mr.extensionValueBlob) as? MediaExtensionEpub
+      val mediaProfile = MediaType.fromMediaType(mr.mediaType)?.profile
+      val isComic = mediaProfile == MediaProfile.DIVINA
 
-      val authors =
-        dslRO
-          .selectFrom(a)
-          .where(a.BOOK_ID.`in`(bookIds))
-          .filter { it.name != null }
-          .groupBy({ it.bookId }, { it })
-
-      val projections =
-        dslRO
-          .selectFrom(p)
-          .where(p.BOOK_ID.`in`(bookIds))
-          .groupBy({ it.bookId }, { it })
+      // comics in a series use the title template, so they make sense in the Kobo library list
+      val (title, subTitle) =
+        if (isComic && !br.oneshot) {
+          val rendered = KoboTitleTemplate.render(titleTemplate, sr.title, dr.number, dr.title)
+          val subTitle =
+            if (!KoboTitleTemplate.containsTitle(titleTemplate) && !KoboTitleTemplate.isGenericTitle(dr.title, dr.number))
+              dr.title
+            else
+              null
+          rendered to subTitle
+        } else {
+          dr.title to null
+        }
 
       KoboBookMetadataDto(
         contributorRoles = authors[dr.bookId].orEmpty().map { ContributorDto(it.name) },
@@ -111,13 +136,30 @@ class KoboDtoDao(
             )
           else
             null,
-        title = dr.title,
+        subTitle = subTitle,
+        title = title,
         workId = dr.bookId,
         isKepub = mr.epubIsKepub,
-        isPrePaginated = mediaExtension?.isFixedLayout == true,
+        // comics are sent as generated fixed-layout EPUBs
+        isPrePaginated = isComic || mediaExtension?.isFixedLayout == true,
         fileSize = br.fileSize,
         extraFileSizes = projections[dr.bookId].orEmpty().associate { it.profile to it.fileSize } + ("default" to br.fileSize),
+        mediaProfile = mediaProfile,
       )
     }
   }
+
+  override fun findMediaInfoByIds(bookIds: Collection<String>): Collection<KoboMediaInfo> =
+    dslRO
+      .select(m.BOOK_ID, m.MEDIA_TYPE, m.PAGE_COUNT)
+      .from(m)
+      .where(m.BOOK_ID.`in`(bookIds))
+      .fetch()
+      .map { rec ->
+        KoboMediaInfo(
+          bookId = rec.get(m.BOOK_ID),
+          profile = MediaType.fromMediaType(rec.get(m.MEDIA_TYPE))?.profile,
+          pageCount = rec.get(m.PAGE_COUNT),
+        )
+      }
 }

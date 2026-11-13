@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.PropertyNamingStrategies
 import com.fasterxml.jackson.databind.annotation.JsonNaming
+import org.gotson.komga.domain.model.MediaProfile
 import java.time.ZonedDateTime
 
 const val DUMMY_ID = "00000000-0000-0000-0000-000000000001"
@@ -50,4 +51,6 @@ data class KoboBookMetadataDto(
   // file size per profile
   @JsonIgnore
   val extraFileSizes: Map<String, Long> = emptyMap(),
+  @JsonIgnore
+  val mediaProfile: MediaProfile? = null,
 )

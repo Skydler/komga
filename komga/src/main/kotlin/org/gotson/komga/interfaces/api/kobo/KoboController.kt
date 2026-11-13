@@ -11,24 +11,31 @@ import org.apache.commons.io.IOUtils
 import org.apache.commons.lang3.RandomStringUtils
 import org.gotson.komga.domain.model.Book
 import org.gotson.komga.domain.model.BookWithMedia
+import org.gotson.komga.domain.model.EPUB_FL_DEFAULT
 import org.gotson.komga.domain.model.KEPUB_DEFAULT
 import org.gotson.komga.domain.model.KomgaSyncToken
+import org.gotson.komga.domain.model.Media
 import org.gotson.komga.domain.model.MediaExtensionEpub
+import org.gotson.komga.domain.model.MediaProfile
 import org.gotson.komga.domain.model.MediaType.EPUB
 import org.gotson.komga.domain.model.R2Device
 import org.gotson.komga.domain.model.R2Locator
 import org.gotson.komga.domain.model.R2Progression
+import org.gotson.komga.domain.model.SeriesMetadata
 import org.gotson.komga.domain.model.SyncPoint
 import org.gotson.komga.domain.persistence.BookRepository
 import org.gotson.komga.domain.persistence.MediaRepository
 import org.gotson.komga.domain.persistence.ReadProgressRepository
+import org.gotson.komga.domain.persistence.SeriesMetadataRepository
 import org.gotson.komga.domain.persistence.SyncPointRepository
 import org.gotson.komga.domain.persistence.ThumbnailBookRepository
 import org.gotson.komga.domain.service.BookLifecycle
 import org.gotson.komga.domain.service.SyncPointLifecycle
 import org.gotson.komga.infrastructure.configuration.KomgaProperties
+import org.gotson.komga.infrastructure.configuration.KomgaSettingsProvider
 import org.gotson.komga.infrastructure.image.ImageConverter
 import org.gotson.komga.infrastructure.image.ImageType
+import org.gotson.komga.infrastructure.kobo.FixedLayoutEpubGenerator
 import org.gotson.komga.infrastructure.kobo.KepubConverter
 import org.gotson.komga.infrastructure.kobo.KoboHeaders.X_KOBO_DEVICEID
 import org.gotson.komga.infrastructure.kobo.KoboHeaders.X_KOBO_SYNC
@@ -177,6 +184,9 @@ class KoboController(
   private val mediaRepository: MediaRepository,
   private val contentRestrictionChecker: ContentRestrictionChecker,
   private val objectMapper: ObjectMapper,
+  private val fixedLayoutEpubGenerator: FixedLayoutEpubGenerator,
+  private val komgaSettingsProvider: KomgaSettingsProvider,
+  private val seriesMetadataRepository: SeriesMetadataRepository,
 ) {
   private val cachedKepub =
     Caffeine
@@ -184,6 +194,14 @@ class KoboController(
       .expireAfterAccess(5, TimeUnit.MINUTES)
       .removalListener<String, Path> { _, value, _ ->
         if (value?.deleteIfExists() == true) logger.debug { "Deleted cached kepub: $value" }
+      }.build<String, Path>()
+
+  private val cachedComicEpub =
+    Caffeine
+      .newBuilder()
+      .expireAfterAccess(5, TimeUnit.MINUTES)
+      .removalListener<String, Path> { _, value, _ ->
+        if (value?.deleteIfExists() == true) logger.debug { "Deleted cached comic epub: $value" }
       }.build<String, Path>()
 
   @GetMapping("ping")
@@ -357,7 +375,9 @@ class KoboController(
             .findBookMetadataByIds((booksAdded.content + booksChanged.content).map { it.bookId })
             .associateBy { it.entitlementId }
             .mapValues { it.value.withDownloadUrls(downloadUriBuilder) }
-        val readProgress = readProgressRepository.findAllByBookIdsAndUserId((booksAdded.content + booksChanged.content + changedReadingState.content).map { it.bookId }, principal.user.id).associateBy { it.bookId }
+        val readProgressBookIds = (booksAdded.content + booksChanged.content + changedReadingState.content).map { it.bookId }
+        val readProgress = readProgressRepository.findAllByBookIdsAndUserId(readProgressBookIds, principal.user.id).associateBy { it.bookId }
+        val mediaInfo = koboDtoRepository.findMediaInfoByIds(readProgress.keys).associateBy { it.bookId }
         val readListsBooks = syncPointRepository.findBookIdsByReadListIds(toSyncPoint.id, (readListsAdded.content + readListsChanged.content).map { it.readListId }).groupBy { it.readListId }
 
         buildList {
@@ -367,7 +387,7 @@ class KoboController(
                 BookEntitlementContainerDto(
                   bookEntitlement = it.toBookEntitlementDto(false),
                   bookMetadata = metadata[it.bookId]!!,
-                  readingState = readProgress[it.bookId]?.toDto() ?: getEmptyReadProgressForBook(it.bookId, it.createdDate),
+                  readingState = readProgress[it.bookId]?.toDto(mediaInfo[it.bookId]) ?: getEmptyReadProgressForBook(it.bookId, it.createdDate),
                 ),
               )
             },
@@ -378,7 +398,7 @@ class KoboController(
                 BookEntitlementContainerDto(
                   bookEntitlement = it.toBookEntitlementDto(false),
                   bookMetadata = metadata[it.bookId]!!,
-                  readingState = readProgress[it.bookId]?.toDto() ?: getEmptyReadProgressForBook(it.bookId, it.createdDate),
+                  readingState = readProgress[it.bookId]?.toDto(mediaInfo[it.bookId]) ?: getEmptyReadProgressForBook(it.bookId, it.createdDate),
                 ),
               )
             },
@@ -404,7 +424,7 @@ class KoboController(
               readProgress[book.bookId]?.let {
                 ChangedReadingStateDto(
                   WrappedReadingStateDto(
-                    it.toDto(),
+                    it.toDto(mediaInfo[book.bookId]),
                   ),
                 )
               }
@@ -453,6 +473,7 @@ class KoboController(
             .associateBy { it.entitlementId }
             .mapValues { it.value.withDownloadUrls(downloadUriBuilder) }
         val readProgress = readProgressRepository.findAllByBookIdsAndUserId(books.content.map { it.bookId }, principal.user.id).associateBy { it.bookId }
+        val mediaInfo = koboDtoRepository.findMediaInfoByIds(readProgress.keys).associateBy { it.bookId }
         val readListsBooks = syncPointRepository.findBookIdsByReadListIds(toSyncPoint.id, readLists.content.map { it.readListId }).groupBy { it.readListId }
 
         buildList {
@@ -462,7 +483,7 @@ class KoboController(
                 BookEntitlementContainerDto(
                   bookEntitlement = it.toBookEntitlementDto(false),
                   bookMetadata = metadata[it.bookId]!!,
-                  readingState = readProgress[it.bookId]?.toDto() ?: getEmptyReadProgressForBook(it.bookId, it.createdDate),
+                  readingState = readProgress[it.bookId]?.toDto(mediaInfo[it.bookId]) ?: getEmptyReadProgressForBook(it.bookId, it.createdDate),
                 ),
               )
             },
@@ -546,7 +567,10 @@ class KoboController(
 
     contentRestrictionChecker.checkContentRestrictionBook(principal.user, book)
 
-    val response = readProgressRepository.findByBookIdAndUserIdOrNull(bookId, principal.user.id)?.toDto() ?: getEmptyReadProgressForBook(book)
+    val response =
+      readProgressRepository.findByBookIdAndUserIdOrNull(bookId, principal.user.id)?.let { progress ->
+        progress.toDto(koboDtoRepository.findMediaInfoByIds(listOf(bookId)).firstOrNull())
+      } ?: getEmptyReadProgressForBook(book)
     return ResponseEntity.ok(listOf(response))
   }
 
@@ -572,7 +596,13 @@ class KoboController(
     contentRestrictionChecker.checkContentRestrictionBook(principal.user, book)
 
     val koboUpdate = body.readingStates.firstOrNull() ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST)
-    if (koboUpdate.currentBookmark.location == null || koboUpdate.currentBookmark.contentSourceProgressPercent == null) throw ResponseStatusException(HttpStatus.BAD_REQUEST)
+    val media = mediaRepository.findById(book.id)
+
+    val locator =
+      if (media.profile == MediaProfile.DIVINA)
+        getComicLocator(koboUpdate, media)
+      else
+        getEpubLocator(koboUpdate, book)
 
     // convert the Kobo update request to an R2Progression
     val r2Progression =
@@ -583,33 +613,7 @@ class KoboController(
             id = principal.apiKey?.id ?: "unknown",
             name = principal.apiKey?.comment ?: "unknown",
           ),
-        locator =
-          if (koboUpdate.statusInfo.status == StatusDto.FINISHED) {
-            // If the book is finished, Kobo sends the first resource instead of the last, so we can't trust what Kobo sent
-            val epubExtension =
-              mediaRepository.findExtensionByIdOrNull(book.id) as? MediaExtensionEpub
-                ?: throw IllegalArgumentException("Epub extension not found")
-                  .also { logger.error { "Epub extension not found for book ${book.id}. Book should be re-analyzed." } }
-            epubExtension.positions.last()
-          } else {
-            R2Locator(
-              href = koboUpdate.currentBookmark.location.source,
-              // assume default, will be overwritten by the correct type when saved
-              type = "application/xhtml+xml",
-              koboSpan =
-                if (koboUpdate.currentBookmark.location.type
-                    .contentEquals("kobospan", true)
-                )
-                  koboUpdate.currentBookmark.location.value
-                else
-                  null,
-              locations =
-                R2Locator.Location(
-                  progression = koboUpdate.currentBookmark.contentSourceProgressPercent / 100,
-                  totalProgression = koboUpdate.currentBookmark.progressPercent?.div(100),
-                ),
-            )
-          },
+        locator = locator,
       )
 
     val response =
@@ -647,6 +651,71 @@ class KoboController(
     return ResponseEntity.ok(response)
   }
 
+  /**
+   * Comics are sent as generated fixed-layout EPUBs, with one resource per page.
+   * The page number is read from the resource href.
+   */
+  private fun getComicLocator(
+    koboUpdate: ReadingStateDto,
+    media: Media,
+  ): R2Locator {
+    val page =
+      if (koboUpdate.statusInfo.status == StatusDto.FINISHED) {
+        // If the book is finished, Kobo sends the first resource instead of the last, so we can't trust what Kobo sent
+        media.pageCount
+      } else {
+        val source = koboUpdate.currentBookmark.location?.source ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST)
+        FixedLayoutEpubGenerator.pageNumberFromHref(source)
+          ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot find page number in location: $source")
+      }
+    if (page !in 1..media.pageCount) throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Page $page is out of bounds")
+
+    return R2Locator(
+      href = FixedLayoutEpubGenerator.pageHref(page),
+      type = media.pages.getOrNull(page - 1)?.mediaType ?: "image/jpeg",
+      locations =
+        R2Locator.Location(
+          position = page,
+          progression = 0F,
+          totalProgression = page.toFloat() / media.pageCount,
+        ),
+    )
+  }
+
+  private fun getEpubLocator(
+    koboUpdate: ReadingStateDto,
+    book: Book,
+  ): R2Locator {
+    if (koboUpdate.currentBookmark.location == null || koboUpdate.currentBookmark.contentSourceProgressPercent == null) throw ResponseStatusException(HttpStatus.BAD_REQUEST)
+
+    return if (koboUpdate.statusInfo.status == StatusDto.FINISHED) {
+      // If the book is finished, Kobo sends the first resource instead of the last, so we can't trust what Kobo sent
+      val epubExtension =
+        mediaRepository.findExtensionByIdOrNull(book.id) as? MediaExtensionEpub
+          ?: throw IllegalArgumentException("Epub extension not found")
+            .also { logger.error { "Epub extension not found for book ${book.id}. Book should be re-analyzed." } }
+      epubExtension.positions.last()
+    } else {
+      R2Locator(
+        href = koboUpdate.currentBookmark.location.source,
+        // assume default, will be overwritten by the correct type when saved
+        type = "application/xhtml+xml",
+        koboSpan =
+          if (koboUpdate.currentBookmark.location.type
+              .contentEquals("kobospan", true)
+          )
+            koboUpdate.currentBookmark.location.value
+          else
+            null,
+        locations =
+          R2Locator.Location(
+            progression = koboUpdate.currentBookmark.contentSourceProgressPercent / 100,
+            totalProgression = koboUpdate.currentBookmark.progressPercent?.div(100),
+          ),
+      )
+    }
+  }
+
   @GetMapping(
     value = ["v1/books/{bookId}/file/epub"],
     produces = [MediaType.APPLICATION_OCTET_STREAM_VALUE],
@@ -657,57 +726,111 @@ class KoboController(
     @PathVariable bookId: String,
     @RequestParam(required = false, name = "convert_kepub") convertToKepub: Boolean = false,
   ): ResponseEntity<StreamingResponseBody> {
-    if (convertToKepub) {
-      bookRepository.findByIdOrNull(bookId)?.let { book ->
-        contentRestrictionChecker.checkContentRestrictionBook(principal.user, book)
+    val book = bookRepository.findByIdOrNull(bookId) ?: throw ResponseStatusException(HttpStatus.NOT_FOUND)
+    val media = mediaRepository.findById(bookId)
 
-        // check cache
-        val cacheKey = book.computeCacheKey()
-        var kepubPath = cachedKepub.getIfPresent(cacheKey)?.let { if (it.exists()) it else null }
+    // comics are sent as generated fixed-layout EPUBs
+    if (media.profile == MediaProfile.DIVINA) {
+      contentRestrictionChecker.checkContentRestrictionBook(principal.user, book)
+      return streamFile(getComicEpub(BookWithMedia(book, media)), "${book.path.nameWithoutExtension}.epub")
+    }
 
-        if (kepubPath == null) {
-          // convert
-          val converted =
-            kepubConverter.convertEpubToKepub(BookWithMedia(book, mediaRepository.findById(bookId)))
-              ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Kepub conversion failed")
-          converted.toFile().deleteOnExit()
-          cachedKepub.put(cacheKey, converted)
-          kepubPath = converted
-        } else {
-          logger.debug { "Found kepub in cache" }
-        }
+    if (!convertToKepub) return commonBookController.getBookFileInternal(principal, bookId)
 
-        try {
-          with(FileSystemResource(kepubPath)) {
-            if (!exists()) throw FileNotFoundException(path)
-            val stream =
-              StreamingResponseBody { os: OutputStream ->
-                this.inputStream.use {
-                  IOUtils.copyLarge(it, os, ByteArray(8192))
-                  os.close()
-                }
-              }
-            return ResponseEntity
-              .ok()
-              .headers(
-                HttpHeaders().apply {
-                  contentDisposition =
-                    ContentDisposition
-                      .builder("attachment")
-                      .filename("${book.path.nameWithoutExtension}.kepub.epub", StandardCharsets.UTF_8)
-                      .build()
-                },
-              ).contentType(getMediaTypeOrDefault(EPUB.type))
-              .contentLength(contentLength())
-              .body(stream)
-          }
-        } catch (ex: FileNotFoundException) {
-          logger.warn(ex) { "File not found: $kepubPath" }
-          throw ResponseStatusException(HttpStatus.NOT_FOUND, "File not found, it may have moved")
-        }
-      } ?: throw ResponseStatusException(HttpStatus.NOT_FOUND)
+    contentRestrictionChecker.checkContentRestrictionBook(principal.user, book)
+
+    // check cache
+    val cacheKey = book.computeCacheKey()
+    var kepubPath = cachedKepub.getIfPresent(cacheKey)?.let { if (it.exists()) it else null }
+
+    if (kepubPath == null) {
+      // convert
+      val converted =
+        kepubConverter.convertEpubToKepub(BookWithMedia(book, media))
+          ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Kepub conversion failed")
+      converted.toFile().deleteOnExit()
+      cachedKepub.put(cacheKey, converted)
+      kepubPath = converted
     } else {
-      return commonBookController.getBookFileInternal(principal, bookId)
+      logger.debug { "Found kepub in cache" }
+    }
+
+    return streamFile(kepubPath, "${book.path.nameWithoutExtension}.kepub.epub")
+  }
+
+  /**
+   * Get the generated fixed-layout EPUB for a comic, from the cache if possible.
+   * The cache key covers the image settings, so a settings change triggers a new generation.
+   */
+  private fun getComicEpub(book: BookWithMedia): Path {
+    val options =
+      FixedLayoutEpubGenerator.Options(
+        maxWidth = komgaSettingsProvider.koboComicMaxWidth,
+        maxHeight = komgaSettingsProvider.koboComicMaxHeight,
+        grayscale = komgaSettingsProvider.koboComicGrayscale,
+      )
+    val seriesMetadata = seriesMetadataRepository.findByIdOrNull(book.book.seriesId)
+    val koboMetadata = koboDtoRepository.findBookMetadataByIds(listOf(book.book.id)).firstOrNull()
+    val metadata =
+      FixedLayoutEpubGenerator.Metadata(
+        bookId = book.book.id,
+        title = koboMetadata?.title ?: book.book.name,
+        language = koboMetadata?.language ?: "en",
+        rightToLeft = seriesMetadata?.readingDirection == SeriesMetadata.ReadingDirection.RIGHT_TO_LEFT,
+        modified = book.book.fileLastModified,
+      )
+    val cacheKey = "${book.book.computeCacheKey()}-${options.cacheKey}-${if (metadata.rightToLeft) "rtl" else "ltr"}"
+
+    cachedComicEpub.getIfPresent(cacheKey)?.let { cached ->
+      if (cached.exists()) {
+        logger.debug { "Found comic epub in cache" }
+        return cached
+      }
+      cachedComicEpub.invalidate(cacheKey)
+    }
+
+    // concurrent requests for the same key wait for a single generation
+    return cachedComicEpub.get(cacheKey) {
+      try {
+        fixedLayoutEpubGenerator.generateToTempFile(book, metadata, options).also { it.toFile().deleteOnExit() }
+      } catch (e: Exception) {
+        logger.error(e) { "Fixed-layout EPUB generation failed for book ${book.book.id}" }
+        throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Fixed-layout EPUB generation failed")
+      }
+    }
+  }
+
+  private fun streamFile(
+    path: Path,
+    fileName: String,
+  ): ResponseEntity<StreamingResponseBody> {
+    try {
+      with(FileSystemResource(path)) {
+        if (!exists()) throw FileNotFoundException(path.toString())
+        val stream =
+          StreamingResponseBody { os: OutputStream ->
+            this.inputStream.use {
+              IOUtils.copyLarge(it, os, ByteArray(8192))
+              os.close()
+            }
+          }
+        return ResponseEntity
+          .ok()
+          .headers(
+            HttpHeaders().apply {
+              contentDisposition =
+                ContentDisposition
+                  .builder("attachment")
+                  .filename(fileName, StandardCharsets.UTF_8)
+                  .build()
+            },
+          ).contentType(getMediaTypeOrDefault(EPUB.type))
+          .contentLength(contentLength())
+          .body(stream)
+      }
+    } catch (ex: FileNotFoundException) {
+      logger.warn(ex) { "File not found: $path" }
+      throw ResponseStatusException(HttpStatus.NOT_FOUND, "File not found, it may have moved")
     }
   }
 
@@ -779,7 +902,13 @@ class KoboController(
           add(
             DownloadUrlDto(
               format = format,
-              size = if (format === FormatDto.KEPUB) extraFileSizes[KEPUB_DEFAULT] ?: fileSize else fileSize,
+              size =
+                when {
+                  format === FormatDto.KEPUB -> extraFileSizes[KEPUB_DEFAULT] ?: fileSize
+                  // the generated file size is only known once generated, until then use the original file size as an estimate
+                  mediaProfile == MediaProfile.DIVINA -> extraFileSizes[EPUB_FL_DEFAULT] ?: fileSize
+                  else -> fileSize
+                },
               url = downloadUriBuilder.build(entitlementId, convert).toURL().toString(),
             ),
           )

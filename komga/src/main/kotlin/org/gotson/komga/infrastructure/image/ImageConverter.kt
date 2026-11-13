@@ -2,21 +2,36 @@ package org.gotson.komga.infrastructure.image
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import net.coobird.thumbnailator.Thumbnails
+import org.gotson.komga.domain.model.Dimension
 import org.gotson.komga.infrastructure.mediacontainer.ContentDetector
 import org.springframework.stereotype.Service
 import java.awt.Color
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import javax.imageio.IIOImage
 import javax.imageio.ImageIO
+import javax.imageio.ImageWriteParam
 import javax.imageio.spi.IIORegistry
 import javax.imageio.spi.ImageReaderSpi
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 private val logger = KotlinLogging.logger {}
 
 private const val WEBP_NIGHT_MONKEYS = "com.github.gotson.nightmonkeys.webp.imageio.plugins.WebpImageReaderSpi"
+
+private const val FITTED_JPEG_QUALITY = 0.85F
+
+// formats that every reader supports, and can be sent as-is
+private val passThroughMediaTypes = setOf("image/jpeg", "image/png", "image/gif")
+
+class FittedImage(
+  val bytes: ByteArray,
+  val mediaType: String,
+  val dimension: Dimension,
+)
 
 @Service
 class ImageConverter(
@@ -136,6 +151,85 @@ class ImageConverter(
       .imageType(BufferedImage.TYPE_INT_ARGB)
       .outputFormat(format.imageIOFormat)
   }
+
+  /**
+   * Fit an image inside a [maxWidth] × [maxHeight] box, keeping the aspect ratio. Images are never upscaled.
+   *
+   * The original bytes are returned when the image already fits, its format is widely supported (JPEG, PNG, GIF),
+   * and [grayscale] is off. Otherwise the image is re-encoded to JPEG, with alpha flattened on a white background.
+   *
+   * @param maxWidth maximum width, or null to disable resizing
+   * @param maxHeight maximum height, or null to disable resizing
+   * @throws IllegalArgumentException if the image cannot be read
+   */
+  fun fitImageToBox(
+    imageBytes: ByteArray,
+    maxWidth: Int?,
+    maxHeight: Int?,
+    grayscale: Boolean,
+  ): FittedImage {
+    val mediaType = contentDetector.detectMediaType(imageBytes.inputStream())
+    val sourceDimension =
+      imageAnalyzer.getDimension(imageBytes.inputStream())
+        ?: throw IllegalArgumentException("Cannot read image dimensions, media type: $mediaType")
+
+    val scale =
+      if (maxWidth == null || maxHeight == null)
+        1.0
+      else
+        minOf(1.0, maxWidth.toDouble() / sourceDimension.width, maxHeight.toDouble() / sourceDimension.height)
+
+    if (scale >= 1.0 && mediaType in passThroughMediaTypes && !grayscale)
+      return FittedImage(imageBytes, mediaType, sourceDimension)
+
+    val source = ImageIO.read(imageBytes.inputStream()) ?: throw IllegalArgumentException("Cannot read image, media type: $mediaType")
+    val targetWidth = max(1, (sourceDimension.width * scale).roundToInt())
+    val targetHeight = max(1, (sourceDimension.height * scale).roundToInt())
+
+    val resized =
+      if (scale < 1.0)
+        Thumbnails
+          .of(source)
+          .forceSize(targetWidth, targetHeight)
+          .asBufferedImage()
+      else
+        source
+
+    // draw on an opaque canvas: flattens alpha on white, and converts to grayscale if needed
+    val flattened =
+      BufferedImage(resized.width, resized.height, if (grayscale) BufferedImage.TYPE_BYTE_GRAY else BufferedImage.TYPE_INT_RGB).also {
+        val graphics = it.createGraphics()
+        try {
+          graphics.drawImage(resized, 0, 0, Color.WHITE, null)
+        } finally {
+          graphics.dispose()
+        }
+      }
+
+    return FittedImage(writeJpeg(flattened, FITTED_JPEG_QUALITY), ImageType.JPEG.mediaType, Dimension(flattened.width, flattened.height))
+  }
+
+  private fun writeJpeg(
+    image: BufferedImage,
+    quality: Float,
+  ): ByteArray =
+    ByteArrayOutputStream().use { baos ->
+      val writer = ImageIO.getImageWritersByFormatName(ImageType.JPEG.imageIOFormat).next()
+      try {
+        ImageIO.createImageOutputStream(baos).use { ios ->
+          writer.output = ios
+          val params =
+            writer.defaultWriteParam.apply {
+              compressionMode = ImageWriteParam.MODE_EXPLICIT
+              compressionQuality = quality
+            }
+          writer.write(null, IIOImage(image, null, null), params)
+        }
+      } finally {
+        writer.dispose()
+      }
+      baos.toByteArray()
+    }
 
   private fun containsAlphaChannel(image: BufferedImage): Boolean = image.colorModel.hasAlpha()
 

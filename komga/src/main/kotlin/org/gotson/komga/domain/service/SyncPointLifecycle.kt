@@ -9,6 +9,7 @@ import org.gotson.komga.domain.model.SearchContext
 import org.gotson.komga.domain.model.SearchOperator
 import org.gotson.komga.domain.model.SyncPoint
 import org.gotson.komga.domain.persistence.SyncPointRepository
+import org.gotson.komga.infrastructure.configuration.KomgaSettingsProvider
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.stereotype.Component
@@ -16,6 +17,7 @@ import org.springframework.stereotype.Component
 @Component
 class SyncPointLifecycle(
   private val syncPointRepository: SyncPointRepository,
+  private val komgaSettingsProvider: KomgaSettingsProvider,
 ) {
   fun createSyncPoint(
     user: KomgaUser,
@@ -39,7 +41,15 @@ class SyncPointLifecycle(
                   )
                 }
                 add(SearchCondition.MediaStatus(SearchOperator.Is(Media.Status.READY)))
-                add(SearchCondition.MediaProfile(SearchOperator.Is(MediaProfile.EPUB)))
+                add(
+                  SearchCondition.AnyOfBook(
+                    buildList {
+                      add(SearchCondition.MediaProfile(SearchOperator.Is(MediaProfile.EPUB)))
+                      // comics are sent as generated fixed-layout EPUBs. PDF is not supported.
+                      if (komgaSettingsProvider.koboSyncComics) add(SearchCondition.MediaProfile(SearchOperator.Is(MediaProfile.DIVINA)))
+                    },
+                  ),
+                )
                 add(SearchCondition.Deleted(SearchOperator.IsFalse))
               },
             ),
