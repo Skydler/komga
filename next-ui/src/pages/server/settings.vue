@@ -29,7 +29,7 @@ import { useSettings, useUpdateSettings } from '@/colada/settings'
 import { commonMessages } from '@/utils/i18n/common-messages'
 
 import { useMessagesStore } from '@/stores/messages'
-import { komgaBooksRegenerateThumbnails } from '@/generated/openapi'
+import { komgaBooksRegenerateThumbnails, type SettingsUpdateDto } from '@/generated/openapi'
 import { useMutation } from '@pinia/colada'
 import type { SettingsUpdateDtoExtended, ThumbnailRegenerate } from '@/types/Settings'
 import { useClientSettingsGlobal, useUpdateClientSettingsGlobal } from '@/colada/client-settings'
@@ -63,7 +63,8 @@ function saveSettings(settings: SettingsUpdateDtoExtended) {
 
   void mutateGlobalSettings(globalUpdate)
 
-  mutateServerSettings(settings)
+  // the generated type does not allow null, but null is needed to clear the Kobo comic size
+  mutateServerSettings(settings as SettingsUpdateDto)
     .then(() => {
       messagesStore.messages.push({
         description: 'Snackbar notification shown upon successful server settings update',

@@ -1219,8 +1219,19 @@ export type SettingsDto = {
     deleteEmptyCollections?: boolean;
     deleteEmptyReadLists?: boolean;
     kepubifyPath?: SettingMultiSourceString;
+    koboComicGrayscale?: boolean;
+    /**
+     * Maximum page height for comics sent to Kobo. Absent means no resize.
+     */
+    koboComicMaxHeight?: number;
+    /**
+     * Maximum page width for comics sent to Kobo. Absent means no resize.
+     */
+    koboComicMaxWidth?: number;
+    koboComicTitleTemplate?: string;
     koboPort?: number;
     koboProxy?: boolean;
+    koboSyncComics?: boolean;
     maxUploadFileSizeBytes?: number;
     nextUiAsDefault?: boolean;
     rememberMeDurationDays?: number;
@@ -1242,8 +1253,22 @@ export type SettingsUpdateDto = {
      * @deprecated
      */
     kepubifyPath?: string;
+    koboComicGrayscale?: boolean;
+    /**
+     * Maximum page height for comics sent to Kobo. Set to null for no resize. Must be set together with koboComicMaxWidth.
+     */
+    koboComicMaxHeight?: number;
+    /**
+     * Maximum page width for comics sent to Kobo. Set to null for no resize. Must be set together with koboComicMaxHeight.
+     */
+    koboComicMaxWidth?: number;
+    /**
+     * Title template for comics sent to Kobo. Placeholders: {series}, {number}, {number:N}, {title}.
+     */
+    koboComicTitleTemplate?: string;
     koboPort?: number;
     koboProxy?: boolean;
+    koboSyncComics?: boolean;
     nextUiAsDefault?: boolean;
     rememberMeDurationDays?: number;
     renewRememberMeKey?: boolean;

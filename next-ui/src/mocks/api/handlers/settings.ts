@@ -12,6 +12,11 @@ export const settings = {
   serverPort: { configurationSource: 8090, effectiveValue: 8090 },
   serverContextPath: { effectiveValue: '' },
   koboProxy: false,
+  koboSyncComics: false,
+  koboComicMaxWidth: 1264,
+  koboComicMaxHeight: 1680,
+  koboComicGrayscale: false,
+  koboComicTitleTemplate: '{series} {number:4}',
   kepubifyPath: {
     configurationSource: '/usr/bin/kepubify',
     effectiveValue: '/usr/bin/kepubify',

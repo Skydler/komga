@@ -418,6 +418,155 @@
         </v-row>
 
         <v-row>
+          <v-col>
+            <div class="text-label-medium">
+              {{
+                $formatMessage({
+                  description: 'Server settings: sub-section header for Kobo Sync of comics',
+                  defaultMessage: 'Comics (CBZ, CBR)',
+                  id: 'yX0aic',
+                })
+              }}
+            </div>
+            <div class="text-body-small">
+              {{
+                $formatMessage({
+                  description: 'Server settings: explanation for the Kobo Sync comics settings',
+                  defaultMessage:
+                    'Comics are sent as fixed-layout EPUB. Changes only apply to new downloads: books already on the Kobo keep their old pages and titles. To update them, delete the sync points of the Kobo API key in your account settings, then sync again.',
+                  id: 'ddDNmn',
+                })
+              }}
+            </div>
+            <v-checkbox
+              v-model="proxyModel.value.koboSyncComics"
+              :label="
+                $formatMessage({
+                  description: 'Server settings: checkbox to include comics in Kobo Sync',
+                  defaultMessage: 'Include comics in Kobo Sync',
+                  id: 'Ugsnnu',
+                })
+              "
+              :hint="
+                $formatMessage({
+                  description:
+                    'Server settings: hint for the checkbox to include comics in Kobo Sync',
+                  defaultMessage:
+                    'Your Kobo will add all the comics in the next sync. PDF is not supported.',
+                  id: '3nwVQh',
+                })
+              "
+              persistent-hint
+            />
+            <v-select
+              :model-value="
+                koboPresetSelection(
+                  proxyModel.value.koboComicMaxWidth,
+                  proxyModel.value.koboComicMaxHeight,
+                )
+              "
+              :items="koboDevicePresetItems"
+              :label="
+                $formatMessage({
+                  description: 'Server settings: selection of the Kobo device to fit comic pages',
+                  defaultMessage: 'Fit comic pages to device',
+                  id: 'RLcEdA',
+                })
+              "
+              class="mt-4"
+              hide-details
+              @update:model-value="(val) => selectKoboPreset(proxyModel.value, val)"
+            />
+            <v-row
+              v-if="
+                koboPresetSelection(
+                  proxyModel.value.koboComicMaxWidth,
+                  proxyModel.value.koboComicMaxHeight,
+                ) === 'CUSTOM'
+              "
+              class="mt-1"
+            >
+              <v-col>
+                <v-number-input
+                  v-model="proxyModel.value.koboComicMaxWidth"
+                  :label="
+                    $formatMessage({
+                      description: 'Server settings: input field for Kobo comic page max width',
+                      defaultMessage: 'Maximum width',
+                      id: '2VLuqU',
+                    })
+                  "
+                  :min="1"
+                  :rules="[rules.required()]"
+                />
+              </v-col>
+              <v-col>
+                <v-number-input
+                  v-model="proxyModel.value.koboComicMaxHeight"
+                  :label="
+                    $formatMessage({
+                      description: 'Server settings: input field for Kobo comic page max height',
+                      defaultMessage: 'Maximum height',
+                      id: 'FsGqJF',
+                    })
+                  "
+                  :min="1"
+                  :rules="[rules.required()]"
+                />
+              </v-col>
+            </v-row>
+            <v-checkbox
+              v-model="proxyModel.value.koboComicGrayscale"
+              :label="
+                $formatMessage({
+                  description: 'Server settings: checkbox to convert Kobo comic pages to grayscale',
+                  defaultMessage: 'Convert comic pages to grayscale',
+                  id: 'u7qsug',
+                })
+              "
+              :hint="
+                $formatMessage({
+                  description: 'Server settings: hint for the Kobo comic grayscale checkbox',
+                  defaultMessage: 'Makes files smaller. Leave off for colour screens.',
+                  id: 'dQzQDB',
+                })
+              "
+              persistent-hint
+            />
+            <v-text-field
+              v-model="proxyModel.value.koboComicTitleTemplate"
+              :label="
+                $formatMessage({
+                  description: 'Server settings: input field for Kobo comic title template',
+                  defaultMessage: 'Comic title template',
+                  id: 'H2VdID',
+                })
+              "
+              :hint="titleTemplateHint(proxyModel.value.koboComicTitleTemplate)"
+              persistent-hint
+              class="mt-4"
+              :rules="[
+                rules.required(),
+                (v: string) =>
+                  isValidKoboTitleTemplate(v) ||
+                  $formatMessage(
+                    {
+                      description:
+                        'Server settings: error message when the Kobo comic title template is invalid. Placeholders are not translated.',
+                      defaultMessage: 'Use only {allowed}, and include {required}',
+                      id: 'c8mN60',
+                    },
+                    {
+                      allowed: '{series}, {number}, {number:4}, {title}',
+                      required: '{series} / {title}',
+                    },
+                  ),
+              ]"
+            />
+          </v-col>
+        </v-row>
+
+        <v-row>
           <v-col cols="auto">
             <v-btn
               :text="
@@ -455,6 +604,17 @@
 
 <script setup lang="ts">
 import { ThumbnailSizeValues, thumbnailSizeMessages } from '@/types/ThumbnailSize'
+import {
+  koboDevicePresetFor,
+  koboDevicePresetMessages,
+  koboDevicePresets,
+  type KoboDevicePresetSelection,
+} from '@/types/KoboDevicePreset'
+import {
+  isValidKoboTitleTemplate,
+  KOBO_TITLE_TEMPLATE_DEFAULT,
+  renderKoboTitleTemplate,
+} from '@/functions/kobo-title-template'
 import { useIntl } from 'vue-intl'
 
 import { watchImmediate } from '@vueuse/core'
@@ -486,6 +646,11 @@ const settingsUpdate = ref<SettingsUpdateDtoExtended>({
   serverContextPath: '',
   koboProxy: false,
   koboPort: undefined,
+  koboSyncComics: false,
+  koboComicMaxWidth: koboDevicePresets.LIBRA.width,
+  koboComicMaxHeight: koboDevicePresets.LIBRA.height,
+  koboComicGrayscale: false,
+  koboComicTitleTemplate: KOBO_TITLE_TEMPLATE_DEFAULT,
   thumbnailRegenerate: 'bigger',
   nextUiAsDefault: false,
   oauth2: {
@@ -509,6 +674,12 @@ watchImmediate(
         serverContextPath: settings.serverContextPath?.databaseSource,
         koboProxy: settings.koboProxy,
         koboPort: settings.koboPort,
+        koboSyncComics: settings.koboSyncComics,
+        // absent from the server response means no resize
+        koboComicMaxWidth: settings.koboComicMaxWidth ?? null,
+        koboComicMaxHeight: settings.koboComicMaxHeight ?? null,
+        koboComicGrayscale: settings.koboComicGrayscale,
+        koboComicTitleTemplate: settings.koboComicTitleTemplate,
         thumbnailRegenerate: 'bigger',
         nextUiAsDefault: settings.nextUiAsDefault,
         oauth2: {
@@ -538,6 +709,55 @@ const thumbnailSizes = ThumbnailSizeValues.map((x) => ({
   title: intl.formatMessage(thumbnailSizeMessages[x]),
   value: x,
 }))
+
+const koboDevicePresetItems = (
+  ['LIBRA', 'CLARA', 'SAGE', 'ELIPSA', 'CUSTOM', 'NONE'] as KoboDevicePresetSelection[]
+).map((x) => ({
+  title: intl.formatMessage(koboDevicePresetMessages[x]),
+  value: x,
+}))
+
+// keeps the custom inputs visible, even when the values match a preset
+const koboCustomSelected = ref(false)
+watch(
+  () => settings,
+  () => (koboCustomSelected.value = false),
+)
+
+function koboPresetSelection(
+  width?: number | null,
+  height?: number | null,
+): KoboDevicePresetSelection {
+  return koboCustomSelected.value ? 'CUSTOM' : koboDevicePresetFor(width, height)
+}
+
+function selectKoboPreset(model: SettingsUpdateDtoExtended, selection: KoboDevicePresetSelection) {
+  koboCustomSelected.value = selection === 'CUSTOM'
+  if (selection === 'CUSTOM') {
+    model.koboComicMaxWidth ??= koboDevicePresets.LIBRA.width
+    model.koboComicMaxHeight ??= koboDevicePresets.LIBRA.height
+  } else if (selection === 'NONE') {
+    model.koboComicMaxWidth = null
+    model.koboComicMaxHeight = null
+  } else {
+    model.koboComicMaxWidth = koboDevicePresets[selection].width
+    model.koboComicMaxHeight = koboDevicePresets[selection].height
+  }
+}
+
+function titleTemplateHint(template?: string): string {
+  return intl.formatMessage(
+    {
+      description:
+        'Server settings: hint for the Kobo comic title template, showing a preview of the result',
+      defaultMessage: 'Example: {preview}',
+      id: 'zkV8Ax',
+    },
+    {
+      preview: renderKoboTitleTemplate(template ?? '', 'One Piece', '45', 'Gear 5'),
+    },
+  )
+}
 
 const messageRequiresRestart = intl.formatMessage({
   description: 'Server settings: input field hint for settings that require a restart',

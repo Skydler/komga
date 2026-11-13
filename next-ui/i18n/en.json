@@ -231,6 +231,10 @@
     "defaultMessage": "Page",
     "description": "Duplicate Page Hash Matches Table header: page"
   },
+  "2VLuqU": {
+    "defaultMessage": "Maximum width",
+    "description": "Server settings: input field for Kobo comic page max width"
+  },
   "2g7iOx": {
     "defaultMessage": "Metrics",
     "description": "Drawer menu for Server > Metrics"
@@ -286,6 +290,10 @@
   "3lLmfX": {
     "defaultMessage": "Collection",
     "description": "Browsing context: collection"
+  },
+  "3nwVQh": {
+    "defaultMessage": "Your Kobo will add all the comics in the next sync. PDF is not supported.",
+    "description": "Server settings: hint for the checkbox to include comics in Kobo Sync"
   },
   "3qQjnw": {
     "defaultMessage": "Language",
@@ -895,6 +903,10 @@
     "defaultMessage": "Save changes",
     "description": "Server settings: button to save any changes made"
   },
+  "FsGqJF": {
+    "defaultMessage": "Maximum height",
+    "description": "Server settings: input field for Kobo comic page max height"
+  },
   "Fwvj/i": {
     "defaultMessage": "{count, plural, one {# series} other {# series} }",
     "description": "Collection add to: collection item subtitle: count of series"
@@ -946,6 +958,10 @@
   "H2B6uF": {
     "defaultMessage": "Choose a series",
     "description": "Import reading list: status message: choose a series"
+  },
+  "H2VdID": {
+    "defaultMessage": "Comic title template",
+    "description": "Server settings: input field for Kobo comic title template"
   },
   "H4Kte4": {
     "defaultMessage": "Title",
@@ -1391,6 +1407,10 @@
     "defaultMessage": "Import",
     "description": "Import books table: bottom bar: import button"
   },
+  "RLcEdA": {
+    "defaultMessage": "Fit comic pages to device",
+    "description": "Server settings: selection of the Kobo device to fit comic pages"
+  },
   "RMHfEo": {
     "defaultMessage": "Any of",
     "description": "Any/All button: anyOf value"
@@ -1566,6 +1586,10 @@
   "UfbIyV": {
     "defaultMessage": "Links",
     "description": "Book view table: links header"
+  },
+  "Ugsnnu": {
+    "defaultMessage": "Include comics in Kobo Sync",
+    "description": "Server settings: checkbox to include comics in Kobo Sync"
   },
   "Uj479p": {
     "defaultMessage": "Release date",
@@ -2171,6 +2195,10 @@
     "defaultMessage": "Users",
     "description": "Users table global header"
   },
+  "c8mN60": {
+    "defaultMessage": "Use only {allowed}, and include {required}",
+    "description": "Server settings: error message when the Kobo comic title template is invalid. Placeholders are not translated."
+  },
   "cAu/I6": {
     "defaultMessage": "Duplicate Pages",
     "description": "Drawer menu for Media > Duplicate Pages"
@@ -2255,6 +2283,10 @@
     "defaultMessage": "language selector",
     "description": "Locale selector button: aria-label"
   },
+  "dQzQDB": {
+    "defaultMessage": "Makes files smaller. Leave off for colour screens.",
+    "description": "Server settings: hint for the Kobo comic grayscale checkbox"
+  },
   "dSlkbn": {
     "defaultMessage": "Overall scan behaviour",
     "description": "Server settings: section header for scan behaviour"
@@ -2266,6 +2298,10 @@
   "da/wb0": {
     "defaultMessage": "Mark all as read",
     "description": "Announcements view: mark all as read button tooltip"
+  },
+  "ddDNmn": {
+    "defaultMessage": "Comics are sent as fixed-layout EPUB. Changes only apply to new downloads: books already on the Kobo keep their old pages and titles. To update them, delete the sync points of the Kobo API key in your account settings, then sync again.",
+    "description": "Server settings: explanation for the Kobo Sync comics settings"
   },
   "ddpX9L": {
     "defaultMessage": "General",
@@ -2318,6 +2354,30 @@
   "egrxd6": {
     "defaultMessage": "User created: {email}",
     "description": "Snackbar notification shown upon successful user creation"
+  },
+  "enum.KoboDevicePreset.CLARA": {
+    "defaultMessage": "Kobo Clara Colour / Clara BW / Clara 2E (1072 × 1448)",
+    "description": "Kobo device preset: Clara Colour / Clara BW / Clara 2E"
+  },
+  "enum.KoboDevicePreset.CUSTOM": {
+    "defaultMessage": "Custom",
+    "description": "Kobo device preset: custom size"
+  },
+  "enum.KoboDevicePreset.ELIPSA": {
+    "defaultMessage": "Kobo Elipsa 2E (1404 × 1872)",
+    "description": "Kobo device preset: Elipsa 2E"
+  },
+  "enum.KoboDevicePreset.LIBRA": {
+    "defaultMessage": "Kobo Libra Colour / Libra 2 (1264 × 1680)",
+    "description": "Kobo device preset: Libra Colour / Libra 2"
+  },
+  "enum.KoboDevicePreset.NONE": {
+    "defaultMessage": "No resize",
+    "description": "Kobo device preset: no resize"
+  },
+  "enum.KoboDevicePreset.SAGE": {
+    "defaultMessage": "Kobo Sage (1440 × 1920)",
+    "description": "Kobo device preset: Sage"
   },
   "enum.MediaProfile.DIVINA": {
     "defaultMessage": "DiViNa",
@@ -3339,6 +3399,10 @@
     "defaultMessage": "Undo",
     "description": "Poster card: action - undo"
   },
+  "u7qsug": {
+    "defaultMessage": "Convert comic pages to grayscale",
+    "description": "Server settings: checkbox to convert Kobo comic pages to grayscale"
+  },
   "uBqZMx": {
     "defaultMessage": "Existing",
     "description": "Book Compare: existing book label"
@@ -3527,6 +3591,10 @@
     "defaultMessage": "Create",
     "description": "Create library dialog: confirmation button"
   },
+  "yX0aic": {
+    "defaultMessage": "Comics (CBZ, CBR)",
+    "description": "Server settings: sub-section header for Kobo Sync of comics"
+  },
   "yaa8so": {
     "defaultMessage": "Scanner",
     "description": "Form add/edit library: Scanner"
@@ -3574,6 +3642,10 @@
   "zfQq+w": {
     "defaultMessage": "Email",
     "description": "User table header: user email"
+  },
+  "zkV8Ax": {
+    "defaultMessage": "Example: {preview}",
+    "description": "Server settings: hint for the Kobo comic title template, showing a preview of the result"
   },
   "zphiTI": {
     "defaultMessage": "An API key with that comment already exists",
