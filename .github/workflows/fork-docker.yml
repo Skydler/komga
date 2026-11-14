@@ -1,6 +1,5 @@
 # Fork-only workflow: builds a Komga Docker image and pushes it to
 # ghcr.io/<owner>/komga. It does not run on the upstream repository.
-# Keep this file out of upstream pull requests.
 name: Fork Docker image
 
 on:
