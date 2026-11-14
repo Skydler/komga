@@ -108,6 +108,7 @@ import java.io.FileNotFoundException
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
+import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -420,14 +421,22 @@ class KoboController(
           )
           addAll(
             // changed books are also passed as changed reading state because Kobo does not process ChangedEntitlement even if it contains a ReadingState
-            (booksChanged.content + changedReadingState.content).mapNotNull { book ->
+            booksChanged.content.mapNotNull { book ->
               readProgress[book.bookId]?.let {
-                ChangedReadingStateDto(
-                  WrappedReadingStateDto(
-                    it.toDto(mediaInfo[book.bookId]),
-                  ),
-                )
+                ChangedReadingStateDto(WrappedReadingStateDto(it.toDto(mediaInfo[book.bookId])))
               }
+            },
+          )
+          addAll(
+            changedReadingState.content.map { book ->
+              ChangedReadingStateDto(
+                WrappedReadingStateDto(
+                  readProgress[book.bookId]?.toDto(mediaInfo[book.bookId])
+                    // The read progress was deleted (marked as unread) since the last sync.
+                    // Use the sync point date, so the Kobo sees a state newer than the progress it has.
+                    ?: getEmptyReadProgressForBook(book.bookId, toSyncPoint.createdDate.withZoneSameInstant(ZoneOffset.UTC)),
+                ),
+              )
             },
           )
           addAll(
@@ -596,6 +605,27 @@ class KoboController(
     contentRestrictionChecker.checkContentRestrictionBook(principal.user, book)
 
     val koboUpdate = body.readingStates.firstOrNull() ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST)
+
+    // The book was marked as unread on the Kobo. The bookmark is not used, it may not have a location.
+    if (koboUpdate.statusInfo.status == StatusDto.READY_TO_READ) {
+      val deleted = bookLifecycle.deleteReadProgressIfOlderThan(book, principal.user, koboUpdate.lastModified)
+      logger.debug { "Kobo marked book ${book.id} as unread, read progress deleted: $deleted" }
+      return ResponseEntity.ok(
+        RequestResultDto(
+          requestResult = ResultDto.SUCCESS,
+          updateResults =
+            listOf(
+              ReadingStateUpdateResultDto(
+                entitlementId = bookId,
+                currentBookmarkResult = ResultDto.SUCCESS.wrapped(),
+                statisticsResult = ResultDto.IGNORED.wrapped(),
+                statusInfoResult = ResultDto.SUCCESS.wrapped(),
+              ),
+            ),
+        ),
+      )
+    }
+
     val media = mediaRepository.findById(book.id)
 
     val locator =

@@ -44,6 +44,7 @@ import java.io.File
 import java.net.URLDecoder
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.ZonedDateTime
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.exists
 import kotlin.io.path.isWritable
@@ -453,6 +454,25 @@ class BookLifecycle(
       readProgressRepository.delete(book.id, user.id)
       eventPublisher.publishEvent(DomainEvent.ReadProgressDeleted(progress))
     }
+  }
+
+  /**
+   * Deletes the read progress only if [modified] is after the saved read date,
+   * so that an old request cannot erase newer reading.
+   *
+   * @return true if the read progress was deleted
+   */
+  fun deleteReadProgressIfOlderThan(
+    book: Book,
+    user: KomgaUser,
+    modified: ZonedDateTime,
+  ): Boolean {
+    val savedProgress = readProgressRepository.findByBookIdAndUserIdOrNull(book.id, user.id) ?: return false
+    if (!modified.withZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime().isAfter(savedProgress.readDate)) return false
+
+    readProgressRepository.delete(book.id, user.id)
+    eventPublisher.publishEvent(DomainEvent.ReadProgressDeleted(savedProgress))
+    return true
   }
 
   fun markProgression(

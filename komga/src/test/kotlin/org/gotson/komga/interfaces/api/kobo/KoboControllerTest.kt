@@ -1,10 +1,15 @@
 package org.gotson.komga.interfaces.api.kobo
 
+import com.jayway.jsonpath.JsonPath
 import org.assertj.core.api.Assertions.assertThat
 import org.gotson.komga.domain.model.BookPage
+import org.gotson.komga.domain.model.Dimension
 import org.gotson.komga.domain.model.KomgaUser
+import org.gotson.komga.domain.model.MarkSelectedPreference
 import org.gotson.komga.domain.model.Media
 import org.gotson.komga.domain.model.MediaType
+import org.gotson.komga.domain.model.ReadProgress
+import org.gotson.komga.domain.model.ThumbnailBook
 import org.gotson.komga.domain.model.UserRoles
 import org.gotson.komga.domain.model.makeBook
 import org.gotson.komga.domain.model.makeLibrary
@@ -23,6 +28,7 @@ import org.gotson.komga.infrastructure.configuration.KomgaSettingsProvider
 import org.gotson.komga.infrastructure.kobo.KoboHeaders
 import org.gotson.komga.infrastructure.kobo.KomgaSyncTokenGenerator
 import org.gotson.komga.infrastructure.web.WebServerEffectiveSettings
+import org.gotson.komga.language.toUTCZoned
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeAll
@@ -39,6 +45,7 @@ import org.springframework.http.HttpHeaders
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.put
+import java.time.ZonedDateTime
 import java.util.stream.Stream
 import org.springframework.http.MediaType as SpringMediaType
 
@@ -149,54 +156,220 @@ class KoboControllerTest(
     }
   }
 
-  @Nested
-  inner class Comics {
-    private val pageCount = 10
+  private val pageCount = 10
 
-    private fun makeComic(): String {
-      val book = makeBook("comic", libraryId = library1.id)
-      makeSeries(name = "One Piece", libraryId = library1.id).also { series ->
-        seriesLifecycle.createSeries(series).let { created ->
-          seriesLifecycle.addBooks(created, listOf(book))
-        }
+  private fun makeComic(): String {
+    val book = makeBook("comic", libraryId = library1.id)
+    makeSeries(name = "One Piece", libraryId = library1.id).also { series ->
+      seriesLifecycle.createSeries(series).let { created ->
+        seriesLifecycle.addBooks(created, listOf(book))
       }
-      mediaRepository.findById(book.id).let { media ->
-        mediaRepository.update(
-          media.copy(
-            status = Media.Status.READY,
-            mediaType = MediaType.ZIP.type,
-            pages = (1..pageCount).map { BookPage("$it.jpg", "image/jpeg") },
-            pageCount = pageCount,
-          ),
-        )
-      }
-      bookMetadataRepository.findById(book.id).let { bookMetadataRepository.update(it.copy(title = "Gear 5", number = "45", numberSort = 45F)) }
-      return book.id
     }
+    mediaRepository.findById(book.id).let { media ->
+      mediaRepository.update(
+        media.copy(
+          status = Media.Status.READY,
+          mediaType = MediaType.ZIP.type,
+          pages = (1..pageCount).map { BookPage("$it.jpg", "image/jpeg") },
+          pageCount = pageCount,
+        ),
+      )
+    }
+    bookMetadataRepository.findById(book.id).let { bookMetadataRepository.update(it.copy(title = "Gear 5", number = "45", numberSort = 45F)) }
+    return book.id
+  }
 
-    private fun stateBody(
-      bookId: String,
-      source: String,
-      status: String = "Reading",
-    ) = """
+  private fun makeEpub(): String {
+    val book = makeBook("epub", libraryId = library1.id)
+    makeSeries(name = "series", libraryId = library1.id).also { series ->
+      seriesLifecycle.createSeries(series).let { created ->
+        seriesLifecycle.addBooks(created, listOf(book))
+      }
+    }
+    mediaRepository.findById(book.id).let { media -> mediaRepository.update(media.copy(status = Media.Status.READY, mediaType = MediaType.EPUB.type)) }
+    // the sync diff compares thumbnail IDs, and does not match books without a thumbnail
+    bookLifecycle.addThumbnailForBook(
+      ThumbnailBook(ByteArray(10), type = ThumbnailBook.Type.USER_UPLOADED, mediaType = "image/jpeg", fileSize = 10L, dimension = Dimension(1, 1), bookId = book.id),
+      MarkSelectedPreference.YES,
+    )
+    return book.id
+  }
+
+  /**
+   * @param source the bookmark location source, or null to send a bookmark without a location
+   */
+  private fun stateBody(
+    bookId: String,
+    source: String?,
+    status: String = "Reading",
+    lastModified: String = "2099-01-01T00:00:00Z",
+  ): String {
+    val location = source?.let { """, "Location": { "Value": "kobo.1.1", "Type": "KoboSpan", "Source": "$it" }""" } ?: ""
+    return """
       {
         "ReadingStates": [
           {
             "EntitlementId": "$bookId",
-            "LastModified": "2099-01-01T00:00:00Z",
+            "LastModified": "$lastModified",
             "CurrentBookmark": {
-              "LastModified": "2099-01-01T00:00:00Z",
+              "LastModified": "$lastModified",
               "ProgressPercent": 1,
-              "ContentSourceProgressPercent": 0,
-              "Location": { "Value": "kobo.1.1", "Type": "KoboSpan", "Source": "$source" }
+              "ContentSourceProgressPercent": 0$location
             },
-            "Statistics": { "LastModified": "2099-01-01T00:00:00Z" },
-            "StatusInfo": { "LastModified": "2099-01-01T00:00:00Z", "Status": "$status", "TimesStartedReading": 1 }
+            "Statistics": { "LastModified": "$lastModified" },
+            "StatusInfo": { "LastModified": "$lastModified", "Status": "$status", "TimesStartedReading": 1 }
           }
         ]
       }
       """.trimIndent()
+  }
 
+  @Nested
+  inner class MarkAsUnread {
+    @Test
+    fun `given comic with read progress when kobo marks it unread then read progress is deleted`() {
+      val bookId = makeComic()
+      bookLifecycle.markReadProgress(bookRepository.findByIdOrNull(bookId)!!, user1, 5)
+
+      mockMvc
+        .put("/kobo/$apiKey/v1/library/$bookId/state") {
+          contentType = SpringMediaType.APPLICATION_JSON
+          content = stateBody(bookId, "OEBPS/Text/page-0005.xhtml", "ReadyToRead")
+        }.andExpect {
+          status { isOk() }
+          jsonPath("RequestResult") { value("Success") }
+        }
+
+      assertThat(readProgressRepository.findByBookIdAndUserIdOrNull(bookId, user1.id)).isNull()
+    }
+
+    @Test
+    fun `given epub with read progress when kobo marks it unread then read progress is deleted`() {
+      val bookId = makeEpub()
+      readProgressRepository.save(ReadProgress(bookId, user1.id, 1, false))
+
+      mockMvc
+        .put("/kobo/$apiKey/v1/library/$bookId/state") {
+          contentType = SpringMediaType.APPLICATION_JSON
+          content = stateBody(bookId, "OEBPS/chapter1.xhtml", "ReadyToRead")
+        }.andExpect {
+          status { isOk() }
+          jsonPath("RequestResult") { value("Success") }
+        }
+
+      assertThat(readProgressRepository.findByBookIdAndUserIdOrNull(bookId, user1.id)).isNull()
+    }
+
+    @Test
+    fun `given read progress when kobo marks book unread without a bookmark location then request succeeds and read progress is deleted`() {
+      val bookId = makeEpub()
+      readProgressRepository.save(ReadProgress(bookId, user1.id, 1, false))
+
+      mockMvc
+        .put("/kobo/$apiKey/v1/library/$bookId/state") {
+          contentType = SpringMediaType.APPLICATION_JSON
+          content = stateBody(bookId, null, "ReadyToRead")
+        }.andExpect {
+          status { isOk() }
+          jsonPath("RequestResult") { value("Success") }
+        }
+
+      assertThat(readProgressRepository.findByBookIdAndUserIdOrNull(bookId, user1.id)).isNull()
+    }
+
+    @Test
+    fun `given newer read progress when kobo marks book unread with an older date then read progress is kept`() {
+      val bookId = makeEpub()
+      readProgressRepository.save(ReadProgress(bookId, user1.id, 1, false))
+
+      mockMvc
+        .put("/kobo/$apiKey/v1/library/$bookId/state") {
+          contentType = SpringMediaType.APPLICATION_JSON
+          content = stateBody(bookId, null, "ReadyToRead", lastModified = "2000-01-01T00:00:00Z")
+        }.andExpect {
+          status { isOk() }
+          jsonPath("RequestResult") { value("Success") }
+        }
+
+      assertThat(readProgressRepository.findByBookIdAndUserIdOrNull(bookId, user1.id)).isNotNull
+    }
+
+    @Test
+    fun `given no read progress when kobo marks book unread then request succeeds and nothing changes`() {
+      val bookId = makeEpub()
+
+      mockMvc
+        .put("/kobo/$apiKey/v1/library/$bookId/state") {
+          contentType = SpringMediaType.APPLICATION_JSON
+          content = stateBody(bookId, null, "ReadyToRead")
+        }.andExpect {
+          status { isOk() }
+          jsonPath("RequestResult") { value("Success") }
+        }
+
+      assertThat(readProgressRepository.findByBookIdAndUserIdOrNull(bookId, user1.id)).isNull()
+    }
+
+    @Test
+    fun `given read progress deleted in komga when syncing then kobo receives a newer ReadyToRead state`() {
+      val bookId = makeEpub()
+      readProgressRepository.save(ReadProgress(bookId, user1.id, 1, false))
+      val progressDate = readProgressRepository.findByBookIdAndUserIdOrNull(bookId, user1.id)!!.lastModifiedDate.toUTCZoned()
+
+      // first sync, Kobo gets the book with its read progress
+      val syncToken1 =
+        mockMvc
+          .get("/kobo/$apiKey/v1/library/sync")
+          .andExpect {
+            status { isOk() }
+            jsonPath("$[0].NewEntitlement.ReadingState.StatusInfo.Status") { value("Reading") }
+            header { doesNotExist(KoboHeaders.X_KOBO_SYNC) }
+          }.andReturn()
+          .response
+          .getHeaderValue(KoboHeaders.X_KOBO_SYNCTOKEN) as String
+
+      bookLifecycle.deleteReadProgress(bookRepository.findByIdOrNull(bookId)!!, user1)
+
+      // second sync, Kobo gets the unread state
+      val response =
+        mockMvc
+          .get("/kobo/$apiKey/v1/library/sync") {
+            header(KoboHeaders.X_KOBO_SYNCTOKEN, syncToken1)
+          }.andExpect {
+            status { isOk() }
+            jsonPath("$.length()") { value(1) }
+            jsonPath("$[0].ChangedReadingState.ReadingState.EntitlementId") { value(bookId) }
+            jsonPath("$[0].ChangedReadingState.ReadingState.StatusInfo.Status") { value("ReadyToRead") }
+          }.andReturn()
+          .response
+          .contentAsString
+
+      val lastModified = ZonedDateTime.parse(JsonPath.read<String>(response, "$[0].ChangedReadingState.ReadingState.LastModified"))
+      assertThat(lastModified).isAfter(progressDate)
+    }
+
+    @Test
+    fun `given book never read when syncing then reading state uses the book creation date`() {
+      val bookId = makeEpub()
+      val createdDate = bookRepository.findByIdOrNull(bookId)!!.createdDate
+
+      val response =
+        mockMvc
+          .get("/kobo/$apiKey/v1/library/sync")
+          .andExpect {
+            status { isOk() }
+            jsonPath("$[0].NewEntitlement.ReadingState.StatusInfo.Status") { value("ReadyToRead") }
+          }.andReturn()
+          .response
+          .contentAsString
+
+      val lastModified = ZonedDateTime.parse(JsonPath.read<String>(response, "$[0].NewEntitlement.ReadingState.LastModified"))
+      assertThat(lastModified).isEqualTo(createdDate.toUTCZoned())
+    }
+  }
+
+  @Nested
+  inner class Comics {
     @Test
     fun `given comic in series when getting metadata then title uses template and download is fixed layout epub`() {
       val bookId = makeComic()
